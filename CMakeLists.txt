@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(example)
 
+option(LIBIGL_WITH_CGAL "Use CGAL" ON)
+option(LIBIGL_USE_STATIC_LIBRARY "Use LibIGL as static library" ON)
+
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Libigl
@@ -15,7 +18,7 @@ igl_include(glfw)
 #igl_include(stb)
 #igl_include(predicates)
 #igl_include(xml)
-#igl_include(copyleft cgal)
+igl_include(copyleft cgal)
 #igl_include(copyleft comiso)
 #igl_include(copyleft core)
 #igl_include(copyleft cork)
@@ -27,10 +30,10 @@ igl_include(glfw)
 # Add your project files
 file(GLOB SRC_FILES *.cpp)
 add_executable(${PROJECT_NAME} ${SRC_FILES})
-
 # Link igl (and the glfw module) to your project
 target_link_libraries(${PROJECT_NAME} PUBLIC 
   igl::glfw
+  CGAL
   ## Other modules you could link to
   # igl::embree
   # igl::imgui
@@ -38,7 +41,7 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
   # igl::stb
   # igl::predicates
   # igl::xml
-  # igl_copyleft::cgal
+  #igl_copyleft::cgal
   # igl_copyleft::comiso
   # igl_copyleft::core
   # igl_copyleft::cork
