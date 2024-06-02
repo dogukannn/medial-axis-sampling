@@ -31,7 +31,17 @@ typedef boost::optional< Tree::Intersection_and_primitive_id<Triangle>::Type > T
 
 igl::opengl::glfw::Viewer viewer;
 
-#define SAMPLE_PER_EDGE 500
+#define SAMPLE_PER_EDGE 5
+#define TOTAL_SAMPLES 5000
+
+struct MedialPoint
+{
+    Vector point;
+    std::set<CGAL::SM_Face_index> governor_faces;
+};
+
+// structure to hold closest medial axis point, distance to it, and face id
+
 
 double face_area(const Mesh& mesh, face_index fd) {
     return CGAL::Polygon_mesh_processing::face_area(fd, mesh);
@@ -193,7 +203,6 @@ void GetMedialAxisPoints(const Mesh& mesh, MeshSampler& sampler, Tree& tree)
         auto intersection = tree.first_intersection(ray);
         if (intersection)
         {
-            
             if (const Point* p =  boost::get<Point>(&(intersection->first)))
             {
                 //add it to the wiever with yellow color
@@ -274,12 +283,13 @@ Vector CalculateEffectiveNormal(const Mesh& mesh, const Tree& tree, const std::v
     //draw effective normal
     //viewer.data().add_points(Eigen::RowVector3d(pv.x(), pv.y(), pv.z()), Eigen::RowVector3d(1, 0, 0));
     //viewer.data().add_edges(Eigen::RowVector3d(pv.x(), pv.y(), pv.z()), Eigen::RowVector3d(pv.x() + effectiveNormal.x(), pv.y() + effectiveNormal.y(), pv.z() + effectiveNormal.z()), Eigen::RowVector3d(1, 0, 1));
-    
+
+    effectiveNormal = effectiveNormal / sqrt(effectiveNormal.squared_length());
     return effectiveNormal;
 }
 
 
-Vector ComputeJuntionPoint(const Mesh& mesh, Tree& tree, Vector p, Vector q, std::vector<Vector>& faceNormals, std::vector<Vector>& edgeNormals)
+Vector ComputeJuntionPoint(const Mesh& mesh, Tree& tree, Vector p, Vector q, std::vector<Vector>& faceNormals)
 {
     auto midPoint = (p + q) / 2;
     Vector junction;
@@ -289,25 +299,11 @@ Vector ComputeJuntionPoint(const Mesh& mesh, Tree& tree, Vector p, Vector q, std
         Point basePoint = tree.closest_point(Point(midPoint.x(), midPoint.y(), midPoint.z()));
         auto pf_pair = tree.closest_point_and_primitive(Point(midPoint.x(), midPoint.y(), midPoint.z()));
         auto fi = boost::get<CGAL::SM_Face_index>(pf_pair.second);
-        //find nearest edge
-        auto ithe = mesh.halfedges_around_face(mesh.halfedge(fi));
-        auto it = ithe.begin();
-        double min_distance = DBL_MAX;
-        CGAL::SM_Halfedge_index min_he = *it;
-        for(auto he : ithe)
-        {
-            Segment s = Segment(mesh.point(mesh.source(he)), mesh.point(mesh.target(he)));
-            double sd = CGAL::squared_distance(s, basePoint);
-            if ( sd < min_distance)
-            {
-                min_distance = sd;
-                min_he = he;
-            }
-        }
-        Vector edgeNormal = edgeNormals[mesh.edge(min_he)];
         
-        Vector inwardEdgeNormal = -edgeNormal;
-        Ray ray(basePoint + inwardEdgeNormal * 0.01, inwardEdgeNormal);
+        Vector faceNormal = faceNormals[fi.idx()];
+        
+        Vector inwardFaceNormal = -faceNormal;
+        Ray ray(basePoint + inwardFaceNormal * 0.01, inwardFaceNormal);
 
         auto intersection = tree.first_intersection(ray);
         if (intersection)
@@ -331,7 +327,11 @@ Vector ComputeJuntionPoint(const Mesh& mesh, Tree& tree, Vector p, Vector q, std
                     if(nq < 0.001)
                         q = midPoint;
                     else
+                    {
+                        Eigen::RowVector3d junctionPointE = Eigen::RowVector3d(junctionPoint.x(), junctionPoint.y(), junctionPoint.z());
+                        viewer.data().add_points(junctionPointE, Eigen::RowVector3d(1,1,1));
                         return midPoint;
+                    }
                 }
                 
             }
@@ -347,66 +347,76 @@ Vector ComputeJuntionPoint(const Mesh& mesh, Tree& tree, Vector p, Vector q, std
     return junctionPoint;
 }
 
-void ComputeMedialJunctionPoints(const Mesh& mesh, Tree& tree, std::vector<Vector>& edge_normals, std::vector<Vector>& face_normals)
+void ComputeMedialJunctionPoints(const Mesh& mesh, MeshSampler& sampler, Tree& tree, std::vector<Vector>& face_normals)
 {
     std::vector<Vector> medialAxisPoints;
     std::vector<Vector> medialJunctionPoints;
     
-    int local_edge_i = 0;
-    for(auto e : edges(mesh))
+    for (int i = 0; i < TOTAL_SAMPLES; i++)
     {
-        auto src = mesh.point(mesh.source(e.halfedge()));
-        auto tgt = mesh.point(mesh.target(e.halfedge()));
-        auto edgeLength = dist(src, tgt);
-        auto edgeNormal = edge_normals[local_edge_i];
-        
-        for(int i = 0; i < SAMPLE_PER_EDGE; i++)
+        auto sample_pair = sampler.sample_random_point();
+        auto point = sample_pair.first;
+        auto face_index = sample_pair.second;
+
+        Eigen::RowVector3d pe = Eigen::RowVector3d(point.x(), point.y(), point.z());
+
+        Vector face_normal = CGAL::Polygon_mesh_processing::compute_face_normal(face_index, mesh);
+        Vector inward_normal = -face_normal;
+
+        // Create the ray
+        Ray ray(point + inward_normal * 0.01, inward_normal);
+
+        auto intersection = tree.first_intersection(ray);
+        if (intersection)
         {
-            double t = (i / (double)SAMPLE_PER_EDGE) * edgeLength;
-            Point pp = src + ((tgt - src) * t);
-            Vector vp = Vector(vp.x(), vp.y(), vp.z());
-
-            Vector inwardEdgeNormal = -edgeNormal;
-            Ray ray(pp + inwardEdgeNormal * 0.01, inwardEdgeNormal);
-            
-            auto intersection = tree.first_intersection(ray);
-            if (intersection)
+            if (const Point* p = boost::get<Point>(&(intersection->first)))
             {
+                //add it to the wiever with yellow color
+                Eigen::RowVector3d intersection_point = Eigen::RowVector3d(p->x(), p->y(), p->z());
+                //viewer.data().add_points(intersection_point, Eigen::RowVector3d(1, 1, 0));
+                //add edge between the point and intersection point
+                //viewer.data().add_edges(pe, intersection_point, Eigen::RowVector3d(0, 1, 0));
+
+                Vector pointVector = point - CGAL::ORIGIN;
+                Vector intersectionVector = *p - CGAL::ORIGIN;
+                auto medialPoint = CalculateMedialPoint(mesh, tree, pointVector, intersectionVector);
+                medialAxisPoints.push_back(medialPoint);
+
+                //add medial point to the viewer
+                Eigen::RowVector3d medialPointE = Eigen::RowVector3d(medialPoint.x(), medialPoint.y(), medialPoint.z());
+                viewer.data().add_points(medialPointE, Eigen::RowVector3d((medialPoint.x() + 1.) / 2., (medialPoint.y()+1.)/2., (medialPoint.z()+1.)/2.));
                 
-                if (const Point* p =  boost::get<Point>(&(intersection->first)))
-                {
-                    //add it to the wiever with yellow color
-                    Eigen::RowVector3d intersection_point = Eigen::RowVector3d(p->x(), p->y(), p->z());
-                    //viewer.data().add_points(intersection_point, Eigen::RowVector3d(1, 1, 0));
-                    //add edge between the point and intersection point
-                    Eigen::RowVector3d pe = Eigen::RowVector3d(pp.x(), pp.y(), pp.z());
-                    //viewer.data().add_edges(pe, intersection_point, Eigen::RowVector3d(0, 1, 0));
-
-                    Vector pointVector = pp - CGAL::ORIGIN;
-                    Vector intersectionVector = *p - CGAL::ORIGIN;
-                    auto medialPoint = CalculateMedialPoint(mesh, tree, pointVector, intersectionVector);
-                    auto effectiveNormal = CalculateEffectiveNormal(mesh, tree, face_normals, medialPoint);
-                    medialAxisPoints.push_back(medialPoint);
-
-                    if(medialAxisPoints.size() > 1)
-                    {
-                        Vector v1 = medialAxisPoints[medialAxisPoints.size() - 2];
-                        Vector v2 = medialAxisPoints[medialAxisPoints.size() - 1];
-
-                        double n = cross_product(v1, v2).squared_length();
-                        if(n > 0.001)
-                        {
-                            Vector junctionPoint = ComputeJuntionPoint(mesh, tree, v1, v2, face_normals, edge_normals);
-                            medialJunctionPoints.push_back(junctionPoint);
-                        }
-                    }
-                    
-                }
+                //if (medialAxisPoints.size() > 1)
+                //{
+                //    Vector v1 = medialAxisPoints[medialAxisPoints.size() - 2];
+                //    Vector v2 = medialAxisPoints[medialAxisPoints.size() - 1];
+                //
+                //    Vector effectiveNormalv1 = CalculateEffectiveNormal(mesh, tree, face_normals, v1);
+                //    Vector effectiveNormalv2 = CalculateEffectiveNormal(mesh, tree, face_normals, v2);
+                //
+                //    double n = cross_product(effectiveNormalv1, effectiveNormalv2).squared_length();
+                //    if (n > 0.1)
+                //    {
+                //        Vector junctionPoint = ComputeJuntionPoint(mesh, tree, v1, v2, face_normals);
+                //        medialJunctionPoints.push_back(junctionPoint);
+                //    }
+                //    else
+                //    {
+                //        std::cout << "skipped " << n << std::endl;
+                //    }
+                //}
+            }
+            else
+            {
+                //std::cout << "Intersection at some primitive." << std::endl;
             }
         }
-        local_edge_i++;
+        else
+        {
+            //std::cout << "No intersection found." << std::endl;
+        }
     }
-    
+
 }
 
 int main(int argc, char* argv[])
@@ -414,13 +424,14 @@ int main(int argc, char* argv[])
     Eigen::MatrixXd V;
     Eigen::MatrixXi F;
     Eigen::MatrixXd FN;
-    igl::readOBJ("../Assets/bunny.obj", V, F);
+    igl::readOBJ("../Assets/dragon.obj", V, F);
 
     // Convert igl mesh to CGAL mesh
     Mesh cgal_mesh;
     for (int i = 0; i < V.rows(); ++i)
     {
-        cgal_mesh.add_vertex(Point(V(i, 0), V(i, 1), V(i, 2)));
+        Point x = Point(V(i, 0) * 5.0, V(i, 1) * 5.0, V(i, 2) * 5.0);
+        cgal_mesh.add_vertex(x);
     }
 
     for (int i = 0; i < F.rows(); ++i)
@@ -443,9 +454,8 @@ int main(int argc, char* argv[])
     {
         face_normals.push_back(CGAL::Polygon_mesh_processing::compute_face_normal(f, cgal_mesh));
     }
-    std::vector<Vector> edge_normals = GetEdgeNormals(cgal_mesh, face_normals);
 
-    ComputeMedialJunctionPoints(cgal_mesh, tree, edge_normals, face_normals);
+    ComputeMedialJunctionPoints(cgal_mesh, sampler, tree, face_normals);
     
     //GetMedialAxisPoints(cgal_mesh, sampler, tree);
 
